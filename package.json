@@ -44,7 +44,8 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "vscode-test",
-    "package": "mkdir -p releases && npx @vscode/vsce package --out releases/ --skip-license --allow-missing-repository"
+    "package": "mkdir -p releases && npx @vscode/vsce package --out releases/ --skip-license --allow-missing-repository",
+    "tag": "bash -c 'read -p \"Enter version tag (e.g. v1.0.0): \" VERSION && git tag $VERSION && git push origin $VERSION'"
   },
   "devDependencies": {
     "@types/flexsearch": "^0.7.42",
