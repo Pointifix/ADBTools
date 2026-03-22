@@ -9,13 +9,24 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onFileSystem:adb"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "adbtools.helloWorld",
-        "title": "Hello World"
+        "title": "ADB Tools: Hello World"
+      },
+      {
+        "command": "adbtools.filterLogs",
+        "title": "ADB Tools: Filter Device Logs"
+      },
+      {
+        "command": "adbtools.openDeviceFs",
+        "title": "ADB Tools: Open Device File System"
       }
     ]
   },
@@ -28,13 +39,17 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.86.0",
+    "@types/flexsearch": "^0.7.42",
     "@types/node": "18.x",
+    "@types/vscode": "^1.86.0",
     "@typescript-eslint/eslint-plugin": "^7.1.1",
     "@typescript-eslint/parser": "^7.1.1",
-    "eslint": "^8.57.0",
-    "typescript": "^5.3.3",
     "@vscode/test-cli": "^0.0.6",
-    "@vscode/test-electron": "^2.3.9"
+    "@vscode/test-electron": "^2.3.9",
+    "eslint": "^8.57.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "flexsearch": "^0.8.212"
   }
 }
