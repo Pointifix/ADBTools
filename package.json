@@ -3,6 +3,13 @@
   "displayName": "ADBTools",
   "description": "Android Debug Bridge Tools Editor Extension",
   "version": "0.0.1",
+  "publisher": "pointifix",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pointifix/ADBTools.git"
+  },
+  "author": "Pointifix",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.86.0"
   },
@@ -36,7 +43,8 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "package": "mkdir -p releases && npx @vscode/vsce package --out releases/ --skip-license --allow-missing-repository"
   },
   "devDependencies": {
     "@types/flexsearch": "^0.7.42",
@@ -46,10 +54,15 @@
     "@typescript-eslint/parser": "^7.1.1",
     "@vscode/test-cli": "^0.0.6",
     "@vscode/test-electron": "^2.3.9",
+    "@vscode/vsce": "^3.7.1",
     "eslint": "^8.57.0",
     "typescript": "^5.3.3"
   },
   "dependencies": {
     "flexsearch": "^0.8.212"
+  },
+  "overrides": {
+    "cheerio": "1.0.0-rc.12",
+    "undici": "5.28.4"
   }
 }
