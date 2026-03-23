@@ -24,28 +24,40 @@
   "contributes": {
     "commands": [
       {
-        "command": "adbtools.helloWorld",
-        "title": "ADB Tools: Hello World"
-      },
-      {
         "command": "adbtools.filterLogs",
         "title": "ADB Tools: Filter Device Logs"
-      },
-      {
-        "command": "adbtools.openDeviceFs",
-        "title": "ADB Tools: Open Device File System"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "ADB Tools",
+      "properties": {
+        "adbtools.logSource": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "logcat",
+            "journalctl"
+          ],
+          "default": "auto",
+          "description": "Select the source for device logs. 'auto' will automatically pick an available source, 'logcat' uses standard Android logs, 'journalctl' uses the systemd journal via adb shell journalctl."
+        },
+        "adbtools.maxLogLines": {
+          "type": "integer",
+          "default": 10000,
+          "description": "The maximum number of log lines to keep for each device. Older lines will be removed to save memory."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "compile": "rm -rf out && webpack --mode production",
+    "watch": "webpack --mode development --watch",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "vscode-test",
     "package": "mkdir -p releases && npx @vscode/vsce package --out releases/ --skip-license --allow-missing-repository",
-    "tag": "bash -c 'read -p \"Enter version tag (e.g. v1.0.0): \" VERSION && git tag $VERSION && git push origin $VERSION'"
+    "tag": "bash -c 'read -p \"Enter version tag (e.g. v1.0.0): \" VERSION && git push && git tag $VERSION && git push origin $VERSION'"
   },
   "devDependencies": {
     "@types/flexsearch": "^0.7.42",
@@ -57,7 +69,10 @@
     "@vscode/test-electron": "^2.3.9",
     "@vscode/vsce": "^3.7.1",
     "eslint": "^8.57.0",
-    "typescript": "^5.3.3"
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.3.3",
+    "webpack": "^5.105.4",
+    "webpack-cli": "^5.1.4"
   },
   "dependencies": {
     "flexsearch": "^0.8.212"

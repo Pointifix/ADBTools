@@ -9,15 +9,30 @@ class AdbMonitor {
     private knownDevices: Map<string, string> = new Map();
     private deviceChannels: Map<string, vscode.OutputChannel> = new Map();
     private deviceLogProcesses: Map<string, child_process.ChildProcessWithoutNullStreams> = new Map();
-    
+
     // FlexSearch State
     private deviceIndices: Map<string, Document<{ id: number, log: string }>> = new Map();
     private deviceLogCounts: Map<string, number> = new Map();
+    private deviceFirstLogId: Map<string, number> = new Map();
     private deviceFilters: Map<string, string> = new Map();
+    private startingDevices: Set<string> = new Set();
+    private maxLogLines: number = 10000;
 
     private buffer = '';
 
-    constructor(private outputChannel: vscode.OutputChannel) { }
+    constructor(private outputChannel: vscode.OutputChannel) {
+        this.updateConfig();
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('adbtools.maxLogLines')) {
+                this.updateConfig();
+            }
+        });
+    }
+
+    private updateConfig() {
+        const config = vscode.workspace.getConfiguration('adbtools');
+        this.maxLogLines = config.get<number>('maxLogLines') || 10000;
+    }
 
     public start() {
         this.outputChannel.appendLine('[ADB Monitor] Starting device monitoring...');
@@ -80,11 +95,11 @@ class AdbMonitor {
             const newState = currentDevices.get(id);
             if (!newState) {
                 this.outputChannel.appendLine(`Device disconnected: ${id} (was ${state})`);
-                this.removeLogChannel(id);
+                this.stopLogProcess(id);
                 this.removeWorkspaceFolder(id);
             } else if (state === 'device' && newState !== 'device') {
                 this.outputChannel.appendLine(`Device state changed to ${newState}: ${id}`);
-                this.removeLogChannel(id);
+                this.stopLogProcess(id);
                 this.removeWorkspaceFolder(id);
             }
         }
@@ -95,13 +110,13 @@ class AdbMonitor {
             if (!oldState) {
                 this.outputChannel.appendLine(`Device connected: ${id} (state: ${state})`);
                 if (state === 'device') {
-                    this.createLogChannel(id);
+                    this.ensureLogProcess(id);
                     this.addWorkspaceFolder(id);
                 }
             } else if (oldState !== state) {
                 this.outputChannel.appendLine(`Device state changed: ${id} from ${oldState} to ${state}`);
                 if (state === 'device') {
-                    this.createLogChannel(id);
+                    this.ensureLogProcess(id);
                     this.addWorkspaceFolder(id);
                 }
             }
@@ -128,58 +143,118 @@ class AdbMonitor {
         }
     }
 
-    private createLogChannel(id: string) {
-        if (this.deviceChannels.has(id)) { return; }
+    private async ensureLogProcess(id: string) {
+        let channel = this.deviceChannels.get(id);
+        let index = this.deviceIndices.get(id);
 
-        const channel = vscode.window.createOutputChannel(`Logcat: ${id}`);
-        this.deviceChannels.set(id, channel);
+        if (!channel || !index) {
+            channel = vscode.window.createOutputChannel(`Device Log: ${id}`);
+            this.deviceChannels.set(id, channel);
 
-        // Initialize FlexSearch Document (acts as both search index and log storage)
-        const index = new Document<{ id: number, log: string }>({
-            document: {
-                id: 'id',
-                index: ['log'],
-                store: true
-            }
-        });
-        this.deviceIndices.set(id, index);
-        this.deviceLogCounts.set(id, 0);
-        this.deviceFilters.set(id, '');
-
-        const logProcess = child_process.spawn('adb', ['-s', id, 'logcat']);
-        this.deviceLogProcesses.set(id, logProcess);
-
-        const handleLogData = (data: string) => {
-            const lines = data.split('\n');
-            for (let line of lines) {
-                line = line.trim();
-                if (!line) continue;
-
-                let count = this.deviceLogCounts.get(id) || 0;
-                index.add({ id: count, log: line });
-                this.deviceLogCounts.set(id, count + 1);
-
-                const filter = this.deviceFilters.get(id);
-                // If filter is empty, or the line matches the filter string, append it to the UI
-                if (!filter || line.toLowerCase().includes(filter.toLowerCase())) {
-                    channel.appendLine(line);
+            // Initialize FlexSearch Document (acts as both search index and log storage)
+            index = new Document<{ id: number, log: string }>({
+                document: {
+                    id: 'id',
+                    index: ['log'],
+                    store: true
                 }
+            });
+            this.deviceIndices.set(id, index);
+            this.deviceLogCounts.set(id, 0);
+            this.deviceFilters.set(id, '');
+        }
+
+        if (this.deviceLogProcesses.has(id) || this.startingDevices.has(id)) {
+            return;
+        }
+
+        this.startingDevices.add(id);
+
+        try {
+            const config = vscode.workspace.getConfiguration('adbtools');
+            let logSource = config.get<string>('logSource') || 'auto';
+
+            if (logSource === 'auto') {
+                channel.appendLine(`[Auto-detecting log source...]`);
+                logSource = await this.detectLogSource(id);
             }
-        };
 
-        logProcess.stdout.on('data', (data) => {
-            handleLogData(data.toString());
+            // double check to prevent racing
+            if (this.deviceLogProcesses.has(id)) { return; }
+
+            let logProcess: child_process.ChildProcessWithoutNullStreams;
+            if (logSource === 'journalctl') {
+                logProcess = child_process.spawn('adb', ['-s', id, 'shell', 'journalctl', '-f']);
+            } else {
+                logProcess = child_process.spawn('adb', ['-s', id, 'logcat']);
+            }
+
+            this.deviceLogProcesses.set(id, logProcess);
+            channel.appendLine(`\n[Log source: ${logSource} started for ${id}]`);
+
+            const handleLogData = (data: string) => {
+                const lines = data.split('\n');
+                for (let line of lines) {
+                    line = line.trim();
+                    if (!line) continue;
+
+                    let count = this.deviceLogCounts.get(id) || 0;
+                    index!.add({ id: count, log: line });
+                    this.deviceLogCounts.set(id, count + 1);
+
+                    if (count >= this.maxLogLines) {
+                        const idToRemove = count - this.maxLogLines;
+                        index!.remove(idToRemove);
+                        this.deviceFirstLogId.set(id, idToRemove + 1);
+                    }
+
+                    const filter = this.deviceFilters.get(id);
+                    // If filter is empty, or the line matches the filter string, append it to the UI
+                    if (!filter || line.toLowerCase().includes(filter.toLowerCase())) {
+                        channel!.appendLine(line);
+                    }
+                }
+            };
+
+            logProcess.stdout.on('data', (data) => {
+                handleLogData(data.toString());
+            });
+
+            logProcess.stderr.on('data', (data) => {
+                handleLogData(data.toString());
+            });
+
+            logProcess.on('close', (code) => {
+                if (this.deviceLogProcesses.get(id) === logProcess) {
+                    this.deviceLogProcesses.delete(id);
+                }
+                channel!.appendLine(`\n[Process exited with code ${code}]`);
+            });
+        } finally {
+            this.startingDevices.delete(id);
+        }
+    }
+
+    private async detectLogSource(id: string): Promise<string> {
+        return new Promise((resolve) => {
+            const cp = child_process.spawn('adb', ['-s', id, 'shell', 'which', 'journalctl']);
+            let output = '';
+            cp.stdout.on('data', (d) => output += d.toString());
+            cp.on('close', (code) => {
+                if (code === 0 && output.trim().length > 0) {
+                    resolve('journalctl');
+                } else {
+                    resolve('logcat');
+                }
+            });
+            cp.on('error', () => resolve('logcat'));
+
+            // Timeout after 3 seconds
+            setTimeout(() => {
+                cp.kill();
+                resolve('logcat');
+            }, 3000);
         });
-
-        logProcess.stderr.on('data', (data) => {
-            handleLogData(data.toString());
-        });
-
-        logProcess.on('close', (code) => {
-            channel.appendLine(`\n[Process exited with code ${code}]`);
-        });
-
-        channel.show(true);
     }
 
     public async applyFilter() {
@@ -189,13 +264,13 @@ class AdbMonitor {
         }
 
         const devices = Array.from(this.deviceChannels.keys());
-        const selectedDevice = devices.length === 1 
-            ? devices[0] 
+        const selectedDevice = devices.length === 1
+            ? devices[0]
             : await vscode.window.showQuickPick(devices, { placeHolder: 'Select a device to filter logs' });
 
         if (!selectedDevice) { return; }
 
-        const query = await vscode.window.showInputBox({ 
+        const query = await vscode.window.showInputBox({
             prompt: `Enter FlexSearch query for ${selectedDevice} (leave empty to clear filter)`,
             value: this.deviceFilters.get(selectedDevice) || ''
         });
@@ -212,23 +287,24 @@ class AdbMonitor {
         channel.clear();
 
         if (query === '') {
+            const firstId = this.deviceFirstLogId.get(selectedDevice) || 0;
             // Restore all logs from the FlexSearch store
-            for (let i = 0; i < count; i++) {
+            for (let i = firstId; i < count; i++) {
                 const doc = index.get(i) as { log: string } | null;
                 if (doc) {
                     channel.appendLine(doc.log);
                 }
             }
-            channel.appendLine(`[Filter cleared. Showing all ${count} logs]`);
+            channel.appendLine(`[Filter cleared. Showing last ${count - firstId} logs]`);
         } else {
-            // Perform FlexSearch query
-            const results = await index.search(query, { enrich: true });
+            const firstId = this.deviceFirstLogId.get(selectedDevice) || 0;
+            const lowerQuery = query.toLowerCase();
             let matchCount = 0;
-            
-            if (results && results.length > 0 && results[0].result) {
-                const matchedDocs = results[0].result as Array<{ doc: { log: string } }>;
-                for (const match of matchedDocs) {
-                    channel.appendLine(match.doc.log);
+
+            for (let i = firstId; i < count; i++) {
+                const doc = index.get(i) as { log: string } | null;
+                if (doc && doc.log.toLowerCase().includes(lowerQuery)) {
+                    channel.appendLine(doc.log);
                     matchCount++;
                 }
             }
@@ -236,7 +312,7 @@ class AdbMonitor {
         }
     }
 
-    private removeLogChannel(id: string) {
+    private stopLogProcess(id: string) {
         const process = this.deviceLogProcesses.get(id);
         if (process) {
             process.kill();
@@ -245,13 +321,8 @@ class AdbMonitor {
 
         const channel = this.deviceChannels.get(id);
         if (channel) {
-            channel.dispose();
-            this.deviceChannels.delete(id);
+            channel.appendLine(`\n[Device disconnected: ${id}]`);
         }
-
-        this.deviceIndices.delete(id);
-        this.deviceLogCounts.delete(id);
-        this.deviceFilters.delete(id);
     }
 
     public dispose() {
@@ -268,11 +339,15 @@ class AdbMonitor {
         this.deviceChannels.clear();
         this.deviceIndices.clear();
         this.deviceLogCounts.clear();
+        this.deviceFirstLogId.clear();
         this.knownDevices.clear();
     }
 
     public getActiveDevices(): string[] {
-        return Array.from(this.deviceChannels.keys());
+        // Return only devices that are currently in 'device' state
+        return Array.from(this.knownDevices.entries())
+            .filter(([id, state]) => state === 'device')
+            .map(([id, state]) => id);
     }
 }
 
@@ -288,10 +363,6 @@ export function activate(context: vscode.ExtensionContext) {
     // Register adbMonitor to be cleaned up on deactivate
     context.subscriptions.push({ dispose: () => adbMonitor?.dispose() });
 
-    let helloCmd = vscode.commands.registerCommand('adbtools.helloWorld', () => {
-        vscode.window.showInformationMessage('ADBTools tracking is active. Check the Output Channel!');
-    });
-
     let searchCmd = vscode.commands.registerCommand('adbtools.filterLogs', () => {
         if (adbMonitor) {
             adbMonitor.applyFilter();
@@ -301,30 +372,7 @@ export function activate(context: vscode.ExtensionContext) {
     const adbFileSystemProvider = new AdbFileSystemProvider();
     context.subscriptions.push(vscode.workspace.registerFileSystemProvider('adb', adbFileSystemProvider, { isCaseSensitive: true }));
 
-    let openFsCmd = vscode.commands.registerCommand('adbtools.openDeviceFs', async () => {
-        if (!adbMonitor) {
-            vscode.window.showErrorMessage('ADB Monitor not initialized.');
-            return;
-        }
-
-        const devices = adbMonitor.getActiveDevices();
-        if (devices.length === 0) {
-            vscode.window.showInformationMessage('No active ADB devices found.');
-            return;
-        }
-
-        const selectedDevice = await vscode.window.showQuickPick(devices, { placeHolder: 'Select a device to open its file system' });
-
-        if (!selectedDevice) { return; }
-
-        // Add the device to the current workspace instead of opening a new window
-        // This ensures the Extension Development Host keeps the extension active!
-        const uri = vscode.Uri.parse(`adb://${selectedDevice}/`);
-        const folderCount = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders.length : 0;
-        vscode.workspace.updateWorkspaceFolders(folderCount, 0, { uri: uri, name: `ADB: ${selectedDevice}` });
-    });
-
-    context.subscriptions.push(helloCmd, searchCmd, openFsCmd);
+    context.subscriptions.push(searchCmd);
 }
 
 export function deactivate() {

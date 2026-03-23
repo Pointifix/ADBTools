@@ -2,10 +2,21 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "watch",
       "type": "npm",
       "script": "watch",
-      "problemMatcher": "$tsc-watch",
       "isBackground": true,
+      "problemMatcher": {
+        "owner": "webpack",
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*webpack.*$",
+          "endsPattern": "^.*compiled successfully.*$"
+        },
+        "pattern": {
+          "regexp": "^$"
+        }
+      },
       "presentation": {
         "reveal": "never"
       },
@@ -15,16 +26,20 @@
       }
     },
     {
+      "label": "compile",
       "type": "npm",
       "script": "compile",
+      "problemMatcher": {
+        "owner": "webpack",
+        "pattern": {
+          "regexp": "^$"
+        }
+      },
       "group": "build",
       "presentation": {
         "panel": "dedicated",
         "reveal": "never"
-      },
-      "problemMatcher": [
-        "$tsc"
-      ]
+      }
     }
   ]
 }

@@ -31,8 +31,8 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
                     }
                 }
             }
-        } catch (e) {}
-        
+        } catch (e) { }
+
         return lowerId;
     }
 
@@ -50,18 +50,31 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
         const targetPath = uri.path || '/';
 
         try {
-            // using ls -ldL to get stat info of the target if it's a symlink
-            // expected output format:
-            // drwxr-xr-x 2 root root 4096 2023-11-01 12:00 /path/to/dir
-            // For older androids, might be different, but toybox ls is pretty standard now
+            if (targetPath === '/.vscode' || targetPath === '/.vscode/') {
+                return {
+                    type: vscode.FileType.Directory,
+                    ctime: 0,
+                    mtime: 0,
+                    size: 0
+                };
+            }
+            if (targetPath === '/.vscode/settings.json') {
+                return {
+                    type: vscode.FileType.File,
+                    ctime: 0,
+                    mtime: 0,
+                    size: 1000 // Approximate
+                };
+            }
+
             const { stdout } = await execFile('adb', ['-s', deviceId, 'shell', 'ls', '-ldL', this.escapePath(targetPath)]);
             const lines = stdout.trim().split('\n');
             if (lines.length === 0 || stdout.includes('No such file or directory')) {
                 throw vscode.FileSystemError.FileNotFound(uri);
             }
 
-            const line = lines[lines.length - 1].trim(); // Get last line in case of warnings
-            
+            const line = lines[lines.length - 1].trim();
+
             // basic parsing for ls -ld
             const isDir = line.startsWith('d');
             let type = isDir ? vscode.FileType.Directory : vscode.FileType.File;
@@ -107,6 +120,10 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
             const lines = stdout.split('\n');
             const result: [string, vscode.FileType][] = [];
 
+            if (targetPath === '/' || targetPath === '') {
+                result.push(['.vscode', vscode.FileType.Directory]);
+            }
+
             for (let line of lines) {
                 line = line.trim();
                 if (!line || line.startsWith('total ')) continue;
@@ -130,7 +147,7 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
                         break;
                     }
                 }
-                
+
                 if (nameIdx !== -1 && nameIdx < parts.length) {
                     let name = parts.slice(nameIdx).join(' ');
                     // Handle symbolic links (name -> target)
@@ -171,12 +188,42 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
     }
 
     async readFile(uri: vscode.Uri): Promise<Uint8Array> {
-        const deviceId = await this.getRealDeviceId(uri.authority);
         const targetPath = uri.path || '/';
+        const deviceId = await this.getRealDeviceId(uri.authority);
+
+        if (targetPath === '/.vscode/settings.json') {
+            const settings = {
+                "terminal.integrated.profiles.linux": {
+                    "ADB Shell": {
+                        "path": "adb",
+                        "args": ["-s", deviceId, "shell"],
+                        "icon": "device-mobile"
+                    }
+                },
+                "terminal.integrated.profiles.osx": {
+                    "ADB Shell": {
+                        "path": "adb",
+                        "args": ["-s", deviceId, "shell"],
+                        "icon": "device-mobile"
+                    }
+                },
+                "terminal.integrated.profiles.windows": {
+                    "ADB Shell": {
+                        "path": "adb",
+                        "args": ["-s", deviceId, "shell"],
+                        "icon": "device-mobile"
+                    }
+                },
+                "terminal.integrated.defaultProfile.linux": "ADB Shell",
+                "terminal.integrated.defaultProfile.osx": "ADB Shell",
+                "terminal.integrated.defaultProfile.windows": "ADB Shell"
+            };
+            return Buffer.from(JSON.stringify(settings, null, 4));
+        }
 
         // Use adb pull to a temp file, then read it
         const tempPath = path.join(os.tmpdir(), `adb_pull_${Date.now()}_${path.basename(targetPath)}`);
-        
+
         try {
             await execFile('adb', ['-s', deviceId, 'pull', targetPath, tempPath]);
             const data = await fs.promises.readFile(tempPath);
@@ -184,7 +231,7 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
             return data;
         } catch (e) {
             // Cleanup just in case
-            fs.promises.unlink(tempPath).catch(() => {});
+            fs.promises.unlink(tempPath).catch(() => { });
             throw vscode.FileSystemError.FileNotFound(uri);
         }
     }
@@ -194,14 +241,14 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
         const targetPath = uri.path || '/';
 
         const tempPath = path.join(os.tmpdir(), `adb_push_${Date.now()}_${path.basename(targetPath)}`);
-        
+
         try {
             await fs.promises.writeFile(tempPath, content);
             await execFile('adb', ['-s', deviceId, 'push', tempPath, targetPath]);
             await fs.promises.unlink(tempPath);
             this._onDidChangeFile.fire([{ type: vscode.FileChangeType.Changed, uri }]);
         } catch (e) {
-            fs.promises.unlink(tempPath).catch(() => {});
+            fs.promises.unlink(tempPath).catch(() => { });
             throw vscode.FileSystemError.NoPermissions(uri);
         }
     }
@@ -209,7 +256,7 @@ export class AdbFileSystemProvider implements vscode.FileSystemProvider {
     async delete(uri: vscode.Uri, options: { recursive: boolean; }): Promise<void> {
         const deviceId = await this.getRealDeviceId(uri.authority);
         const targetPath = uri.path || '/';
-        
+
         try {
             const rmArgs = ['-s', deviceId, 'shell', 'rm'];
             if (options.recursive) {
