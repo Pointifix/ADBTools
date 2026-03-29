@@ -17,8 +17,8 @@ class AdbMonitor {
     private deviceFilters: Map<string, string> = new Map();
     private startingDevices: Set<string> = new Set();
     private maxLogLines: number = 10000;
-
     private buffer = '';
+    private isDisposed = false;
 
     constructor(private outputChannel: vscode.OutputChannel) {
         this.updateConfig();
@@ -35,24 +35,40 @@ class AdbMonitor {
     }
 
     public start() {
+        if (this.isDisposed) return;
+        this.buffer = '';
         this.outputChannel.appendLine('[ADB Monitor] Starting device monitoring...');
-        // adb track-devices sends the state of all devices whenever a device connects/disconnects
-        this.adbProcess = child_process.spawn('adb', ['track-devices']);
 
-        this.adbProcess.stdout.on('data', (data) => {
-            this.buffer += data.toString();
-            this.processBuffer();
-        });
+        try {
+            this.adbProcess = child_process.spawn('adb', ['track-devices']);
 
-        this.adbProcess.stderr.on('data', (data) => {
-            this.outputChannel.appendLine(`[ADB Error] ${data.toString().trim()}`);
-        });
+            this.adbProcess.on('error', (err) => {
+                this.outputChannel.appendLine(`[ADB Error] Failed to start track-devices: ${err.message}`);
+                this.adbProcess = undefined;
+            });
 
-        this.adbProcess.on('close', (code) => {
-            this.outputChannel.appendLine(`[ADB Monitor] Process exited with code ${code}`);
-            // Restart if it crashes
-            setTimeout(() => this.start(), 5000);
-        });
+            this.adbProcess.stdout.on('data', (data) => {
+                this.buffer += data.toString();
+                this.processBuffer();
+            });
+
+            this.adbProcess.stderr.on('data', (data) => {
+                this.outputChannel.appendLine(`[ADB Error] ${data.toString().trim()}`);
+            });
+
+            this.adbProcess.on('close', (code) => {
+                this.outputChannel.appendLine(`[ADB Monitor] Process exited with code ${code}`);
+                this.adbProcess = undefined;
+                if (!this.isDisposed) {
+                    setTimeout(() => this.start(), 5000);
+                }
+            });
+        } catch (err: any) {
+            this.outputChannel.appendLine(`[ADB Error] Critical failure spawning adb: ${err.message}`);
+            if (!this.isDisposed) {
+                setTimeout(() => this.start(), 10000);
+            }
+        }
     }
 
     private processBuffer() {
@@ -95,10 +111,12 @@ class AdbMonitor {
             const newState = currentDevices.get(id);
             if (!newState) {
                 this.outputChannel.appendLine(`Device disconnected: ${id} (was ${state})`);
+                this.showStatusNotification(`ADB Disconnected: ${id}`, '$(debug-disconnect)');
                 this.stopLogProcess(id);
                 this.removeWorkspaceFolder(id);
             } else if (state === 'device' && newState !== 'device') {
                 this.outputChannel.appendLine(`Device state changed to ${newState}: ${id}`);
+                this.showStatusNotification(`ADB Disconnected: ${id} (${newState})`, '$(debug-disconnect)');
                 this.stopLogProcess(id);
                 this.removeWorkspaceFolder(id);
             }
@@ -110,12 +128,16 @@ class AdbMonitor {
             if (!oldState) {
                 this.outputChannel.appendLine(`Device connected: ${id} (state: ${state})`);
                 if (state === 'device') {
+                    this.showStatusNotification(`ADB Connected: ${id}`, '$(device-mobile)');
                     this.ensureLogProcess(id);
                     this.addWorkspaceFolder(id);
+                } else {
+                    this.showStatusNotification(`ADB Connected: ${id} (${state})`, '$(device-mobile)');
                 }
             } else if (oldState !== state) {
                 this.outputChannel.appendLine(`Device state changed: ${id} from ${oldState} to ${state}`);
                 if (state === 'device') {
+                    this.showStatusNotification(`ADB Connected: ${id}`, '$(device-mobile)');
                     this.ensureLogProcess(id);
                     this.addWorkspaceFolder(id);
                 }
@@ -123,6 +145,13 @@ class AdbMonitor {
         }
 
         this.knownDevices = currentDevices;
+    }
+
+    private showStatusNotification(message: string, icon: string) {
+        const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+        item.text = `${icon} ${message}`;
+        item.show();
+        setTimeout(() => item.dispose(), 5000);
     }
 
     private addWorkspaceFolder(id: string) {
@@ -326,6 +355,7 @@ class AdbMonitor {
     }
 
     public dispose() {
+        this.isDisposed = true;
         if (this.adbProcess) {
             this.adbProcess.kill();
         }
