@@ -26,20 +26,37 @@
       {
         "command": "adbtools.filterLogs",
         "title": "ADB Tools: Filter Device Logs"
+      },
+      {
+        "command": "adbtools.openDashboard",
+        "title": "ADB Tools: Open Dashboard"
       }
     ],
+    "terminal": {
+      "profiles": [
+        {
+          "id": "adbtools.terminalProfile",
+          "title": "ADB Shell",
+          "icon": "terminal"
+        }
+      ]
+    },
     "configuration": {
       "title": "ADB Tools",
       "properties": {
-        "adbtools.logSource": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "logcat",
-            "journalctl"
+        "adbtools.dashboardCommands": {
+          "type": "array",
+          "default": [
+            {
+              "name": "Reboot",
+              "command": "reboot"
+            },
+            {
+              "name": "List Data",
+              "command": "ls -al /data"
+            }
           ],
-          "default": "auto",
-          "description": "Select the source for device logs. 'auto' will automatically pick an available source, 'logcat' uses standard Android logs, 'journalctl' uses the systemd journal via adb shell journalctl."
+          "description": "Commands to display as buttons in the ADB Dashboard."
         },
         "adbtools.maxLogLines": {
           "type": "integer",
